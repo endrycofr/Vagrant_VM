@@ -1,4 +1,3 @@
-````md
 ## Instalasi Vagrant & VirtualBox
 
 Environment lab ini menggunakan **Vagrant** sebagai provisioning tool dan **VirtualBox** sebagai hypervisor.  
@@ -27,7 +26,6 @@ Verifikasi instalasi:
 ```bash
 VBoxManage --version
 ```
-````
 
 Jika versi muncul, VirtualBox siap digunakan.
 
