@@ -1,0 +1,8 @@
+# Ignore private & public key files in ssh folder
+ssh/*.pem
+ssh/*.pub
+ssh/*.key
+# Ignore environment variable files
+.env
+.env.local
+.vagrant
