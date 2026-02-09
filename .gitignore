@@ -2,7 +2,10 @@
 ssh/*.pem
 ssh/*.pub
 ssh/*.key
+
 # Ignore environment variable files
 .env
 .env.local
-.vagrant
+
+# Ignore Vagrant state
+.vagrant/

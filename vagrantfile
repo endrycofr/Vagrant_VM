@@ -2,10 +2,10 @@ Vagrant.configure("2") do |config|
   config.vm.box = "ubuntu/jammy64"
 
   nodes = [
-    { name: "k3s-master1", ip: "192.168.56.11" },
-    { name: "k3s-master2", ip: "192.168.56.12" },
-    { name: "k3s-master3", ip: "192.168.56.13" },
-    { name: "lb",          ip: "192.168.56.14" }
+    { name: "k3s-master1", ip: "10.200.3.11" },
+    { name: "k3s-master2", ip: "10.200.3.12" },
+    { name: "k3s-master3", ip: "10.200.3.13" },
+    { name: "lb",          ip: "10.200.3.14" }
   ]
 
   nodes.each do |node|
@@ -13,13 +13,19 @@ Vagrant.configure("2") do |config|
       vm.vm.hostname = node[:name]
       vm.vm.network "private_network", ip: node[:ip]
 
-      vm.vm.provider "virtualbox" do |vb|
-        vb.name = node[:name]
-        vb.memory = 2048
-        vb.cpus = 2
+      # Set resource spesifik untuk lb
+      vm.vm.provider "vmware_desktop" do |v|
+        v.name = node[:name]
+        if node[:name] == "lb"
+          v.memory = 4096
+          v.cpus = 2
+        else
+          v.memory = 8182
+          v.cpus = 4
+        end
       end
 
-      # COPY SSH PUBLIC KEY (SETELAH BOOT)
+      # COPY SSH PUBLIC KEY
       vm.vm.provision "file",
         source: "D:/ISO OS linux/Virtualbox/vagrant/ssh/k3s.pem.pub",
         destination: "/tmp/k3s.pem.pub"
