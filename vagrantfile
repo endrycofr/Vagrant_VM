@@ -1,10 +1,9 @@
 Vagrant.configure("2") do |config|
-  config.vm.box = "ubuntu/jammy64"
+  config.vm.box = "bento/ubuntu-22.04"
 
   nodes = [
     { name: "k3s-master1", ip: "10.200.3.11" },
     { name: "k3s-master2", ip: "10.200.3.12" },
-    # { name: "k3s-master3", ip: "10.200.3.13" },
     { name: "lb",          ip: "10.200.3.14" }
   ]
 
@@ -13,12 +12,10 @@ Vagrant.configure("2") do |config|
       vm.vm.hostname = node[:name]
       vm.vm.network "private_network", ip: node[:ip]
 
-      # Pakai SSH key custom
-      vm.ssh.private_key_path = ["./k3s.pem"]
-
       # VMware Desktop provider
       vm.vm.provider "vmware_desktop" do |v|
-        v.name = node[:name]
+        # PERBAIKAN: VMware tidak kenal v.name, gunakan vmx displayName
+        v.vmx["displayName"] = node[:name]
 
         if node[:name] == "lb"
           v.memory = 4096
@@ -37,7 +34,6 @@ Vagrant.configure("2") do |config|
       # INSTALL & ADD SSH KEY
       vm.vm.provision "shell", inline: <<-SHELL
         set -e
-
         sudo apt-get update -y
         sudo apt-get install -y openssh-server curl
         sudo systemctl enable ssh
