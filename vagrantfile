@@ -13,27 +13,33 @@ Vagrant.configure("2") do |config|
       vm.vm.hostname = node[:name]
       vm.vm.network "private_network", ip: node[:ip]
 
-      # Set resource spesifik untuk lb
+      # Pakai SSH key custom
+      vm.ssh.private_key_path = ["./k3s.pem"]
+
+      # VMware Desktop provider
       vm.vm.provider "vmware_desktop" do |v|
         v.name = node[:name]
+
         if node[:name] == "lb"
           v.memory = 4096
-          v.cpus = 2
+          v.cpus  = 2
         else
-          v.memory = 8182
-          v.cpus = 4
+          v.memory = 8192
+          v.cpus  = 4
         end
       end
 
       # COPY SSH PUBLIC KEY
       vm.vm.provision "file",
-        source: "D:/ISO OS linux/Virtualbox/vagrant/ssh/k3s.pem.pub",
+        source: "k3s.pem.pub",
         destination: "/tmp/k3s.pem.pub"
 
       # INSTALL & ADD SSH KEY
       vm.vm.provision "shell", inline: <<-SHELL
-        sudo apt update -y
-        sudo apt install -y openssh-server curl
+        set -e
+
+        sudo apt-get update -y
+        sudo apt-get install -y openssh-server curl
         sudo systemctl enable ssh
         sudo systemctl start ssh
 
