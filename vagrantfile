@@ -2,20 +2,20 @@ Vagrant.configure("2") do |config|
   config.vm.box = "bento/ubuntu-22.04"
 
   nodes = [
-    { name: "k3s-master1", ip: "192.168.56.11" },
-    { name: "k3s-master2", ip: "192.168.56.12" },
-    { name: "lb",          ip: "192.168.56.14" }
+    { name: "k3s-master1", private_ip: "192.168.56.11", public_ip: "172.16.0.11" },
+    { name: "k3s-master2", private_ip: "192.168.56.12", public_ip: "172.16.0.12" },
+    { name: "lb",          private_ip: "192.168.56.14", public_ip: "172.16.0.14" }
   ]
 
   nodes.each do |node|
     config.vm.define node[:name] do |vm|
       vm.vm.hostname = node[:name]
 
-      # PRIVATE NETWORK (VMware Host-Only)
-      vm.vm.network "private_network", ip: node[:ip]
+      # PRIVATE NETWORK (Host-Only → hanya host PC bisa akses)
+      vm.vm.network "private_network", ip: node[:private_ip]
 
-      # PUBLIC NETWORK (BRIDGE → bisa SSH dari laptop lain)
-      vm.vm.network "public_network"
+      # PUBLIC NETWORK (Bridged → bisa SSH dari PC lain di LAN)
+      vm.vm.network "public_network", ip: node[:public_ip]
 
       # VMware Desktop provider
       vm.vm.provider "vmware_desktop" do |v|
