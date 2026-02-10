@@ -8,36 +8,69 @@ wsl --set-default-version 2
 # Tunggu user tekan enter sebelum lanjut
 Read-Host "WSL sudah terinstall? Tekan Enter untuk lanjut..."
 
-# === 2️⃣ Setup folder untuk WSL custom ===
-$basePath = "D:\ISO OS linux\wsl"  # Ganti sesuai folder kamu
-$sshPub = "$basePath\ssh\k3s.pub"   # Public key SSH kamu
-$ubuntuImage = "$basePath\ubuntu-22.04.tar"
+# =========================================
+# Full Auto WSL + 3 Ubuntu + SSH
+# =========================================
 
-# Download Ubuntu rootfs jika belum ada
-if (-not (Test-Path $ubuntuImage)) {
-    Write-Host "Download Ubuntu 22.04 rootfs..."
-    Invoke-WebRequest -Uri "https://partner-images.canonical.com/core/jammy/current/ubuntu-22.04-server-cloudimg-amd64-wsl.rootfs.tar.gz" -OutFile "$ubuntuImage.gz"
-
-    Write-Host "Extract Ubuntu rootfs..."
-    # Gunakan 7zip atau tool gzip, di PowerShell bisa pakai:
-    # Pastikan gzip ada, atau unzip manual
-    gzip -d "$ubuntuImage.gz"
-}
-
-# === 3️⃣ Buat list WSL ===
+# === 0️⃣ Variabel ===
+$basePath = "C:\users\NUHA\Vagrant_VM"   # Folder tempat WSL & SSH
+$sshFolder = "$basePath\ssh"
+$sshPub = "$sshFolder\k3s.pub"
+$sshPrivate = "$sshFolder\k3s"
+$ubuntuTarGz = "$basePath\ubuntu-22.04-server-cloudimg-amd64-wsl.rootfs.tar.gz"
+$ubuntuTar = "$basePath\ubuntu-22.04.tar"
 $wslList = @("k3s-master1","k3s-master2","LB")
 
+# === 1️⃣ Aktifkan WSL & VM Platform ===
+Write-Host "`n[1] Mengaktifkan WSL & Virtual Machine Platform..."
+dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+wsl --set-default-version 2
+
+Write-Host "Restart Windows dulu jika baru aktifkan WSL. Tekan Enter untuk lanjut..."
+Read-Host
+
+# === 2️⃣ Buat folder jika belum ada ===
+if (-not (Test-Path $basePath)) { New-Item -ItemType Directory -Path $basePath }
+if (-not (Test-Path $sshFolder)) { New-Item -ItemType Directory -Path $sshFolder }
+
+# === 3️⃣ Generate SSH key jika belum ada ===
+if (-not (Test-Path $sshPub)) {
+    Write-Host "`n[2] Membuat SSH key baru..."
+    ssh-keygen -t rsa -b 4096 -f $sshPrivate -N ""
+    Copy-Item "$sshPrivate.pub" $sshPub -Force
+}
+
+# === 4️⃣ Download Ubuntu rootfs jika belum ada ===
+if (-not (Test-Path $ubuntuTarGz)) {
+    Write-Host "`n[3] Download Ubuntu 22.04 rootfs..."
+    $url = "https://partner-images.canonical.com/core/jammy/current/ubuntu-22.04-server-cloudimg-amd64-wsl.rootfs.tar.gz"
+    $output = $ubuntuTarGz
+    # Pakai BITSAdmin (bawaan Windows)
+    bitsadmin /transfer myDownloadJob /download /priority normal $url $output
+}
+
+# === 5️⃣ Extract .tar.gz ke .tar ===
+if (-not (Test-Path $ubuntuTar)) {
+    Write-Host "`n[4] Extract Ubuntu rootfs..."
+    # Windows 10/11 sudah ada tar.exe
+    tar -xvzf $ubuntuTarGz -C $basePath
+    # rename folder 'rootfs' jadi ubuntu-22.04.tar jika perlu
+    Rename-Item "$basePath\rootfs" $ubuntuTar -Force
+}
+
+# === 6️⃣ Import & setup 3 WSL ===
 foreach ($wsl in $wslList) {
     $folder = "$basePath\Ubuntu-$wsl"
-    Write-Host "Membuat WSL $wsl di $folder..."
+    Write-Host "`n[5] Membuat WSL: $wsl di $folder..."
     
-    # Import WSL baru
-    wsl --import $wsl $folder $ubuntuImage --version 2
+    # Import WSL
+    wsl --import $wsl $folder $ubuntuTar --version 2
 
-    # Set hostname, SSH key, install OpenSSH
-    # Gunakan path WSL sesuai drive (D: → /mnt/d/)
-    $sshPathWSL = "/mnt/d/ISO\ OS\ linux/wsl/ssh/k3s.pub"
+    # Path SSH di WSL (C: -> /mnt/c/)
+    $sshPathWSL = "/mnt/c/users/NUHA/Vagrant_VM/ssh/k3s.pub"
 
+    # Setup hostname, hosts, SSH key, install tools
     wsl -d $wsl -- bash -c "
         echo $wsl | sudo tee /etc/hostname
         sudo sed -i '1i127.0.0.1 $wsl' /etc/hosts
@@ -50,6 +83,6 @@ foreach ($wsl in $wslList) {
     "
 }
 
-Write-Host "✅ Selesai membuat 3 WSL dengan hostname dan SSH key!"
-Write-Host "Cek WSL dengan: wsl -l -v"
-    
+Write-Host "`n✅ Selesai! 3 WSL sudah siap dengan hostname dan SSH key."
+Write-Host "Cek WSL: wsl -l -v"
+Write-Host "SSH antar WSL sudah bisa tanpa password."
