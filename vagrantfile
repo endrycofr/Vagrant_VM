@@ -43,7 +43,7 @@
 
 
 Vagrant.configure("2") do |config|
-  config.vm.box = "ubuntu/jammy64"
+  config.vm.box = "bento/ubuntu-22.04"
 
   nodes = [
     { name: "k3s-master1", ip: "192.168.56.11" },
@@ -75,7 +75,7 @@ Vagrant.configure("2") do |config|
 
       # COPY SSH PUBLIC KEY (SETELAH BOOT)
       vm.vm.provision "file",
-        source: "D:/ISO OS linux/Virtualbox/vagrant/ssh/k3s.pem.pub",
+        source: "C:/Users/NUHA/Vagrant_VM/ssh/k3s.pem.pub",
         destination: "/tmp/k3s.pem.pub"
 
       # INSTALL & ADD SSH KEY
