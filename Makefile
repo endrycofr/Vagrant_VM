@@ -1,6 +1,6 @@
-.PHONY: up del vm_start
+.PHONY: up del vm_start vm_stop reset
 
-VM_NAME= k3s-master1 k3s-master2 k3s-master3 lb
+VM_NAME= k3s-master1 k3s-master2 k3s-master3 
 
 up:
 	vagrant up
@@ -11,3 +11,5 @@ vm_start:
 
 vm_stop:
 	vagrant halt $(VM_NAME)
+reset:
+	vagrant reload  k3s-master1 --provision
