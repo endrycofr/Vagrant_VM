@@ -1,7 +1,8 @@
 .PHONY: up del vm_start vm_stop reset
 
-VM_NAME= k3s-master1 k3s-master2 k3s-master3 
-
+VM_MASTER= k3s-master1 
+VM_WORKER= k3s-worker1 k3s-worker2
+VM_NAME= $(VM_MASTER) $(VM_WORKER)
 up:
 	vagrant up
 del:

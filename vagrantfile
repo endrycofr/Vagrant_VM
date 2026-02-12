@@ -49,6 +49,8 @@ Vagrant.configure("2") do |config|
     { name: "k3s-master1", ip: "192.168.56.11" },
     { name: "k3s-master2", ip: "192.168.56.12" },
     { name: "k3s-master3", ip: "192.168.56.13" },
+    { name: "k3s-worker1", ip: "192.168.56.15" },
+    { name: "k3s-worker2", ip: "192.168.56.16" },
     { name: "lb",          ip: "192.168.56.14" }
   ]
 
@@ -68,9 +70,13 @@ Vagrant.configure("2") do |config|
       vm.vm.network "private_network", ip: node[:ip]
 
       vm.vm.provider "virtualbox" do |vb|
+        if node[:name] == "k3s-worker1" || node[:name] == "k3s-worker2"
+          vb.memory = 2048
+          vb.cpus = 2
+        end
         vb.name = node[:name]
-        vb.memory = 2048
-        vb.cpus = 2
+        vb.memory = 4096
+        vb.cpus = 4
       end
 
       # COPY SSH PUBLIC KEY (SETELAH BOOT)
