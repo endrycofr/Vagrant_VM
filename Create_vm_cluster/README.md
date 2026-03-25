@@ -157,7 +157,3 @@ Berikut gambaran arsitektur lab K3s HA yang dibangun menggunakan Vagrant:
     | 192.168.56.11  |  | 192.168.56.12  |  | 192.168.56.13  |
     | Init Master    |  | Join Master    |  | Join Master    |
     +----------------+  +----------------+  +----------------+
-
-```
-
-```
