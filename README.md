@@ -91,11 +91,11 @@ Konfigurasi cluster dilakukan secara otomatis menggunakan Ansible, meliputi:
 
 ## ⚖️ Comparison
 
+
 | Aspect           | Minikube               | K3s Cluster           |
 | ---------------- | ---------------------- | --------------------- |
 | Architecture     | Single-node            | Multi-node            |
 | Setup Complexity | Low                    | Medium – High         |
-| Automation       | None / Minimal         | Full (Ansible + IaC)  |
 | Use Case         | Development & Learning | Production Simulation |
 | Scalability      | Limited                | Scalable              |
 
