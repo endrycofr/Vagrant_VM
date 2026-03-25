@@ -1,4 +1,3 @@
-```markdown
 # 🚀 Vagrant Minikube Lab
 
 Setup local Kubernetes cluster menggunakan **Vagrant + VirtualBox + Docker + Minikube** dengan konfigurasi fleksibel berbasis `.env`.
@@ -16,7 +15,7 @@ Setup local Kubernetes cluster menggunakan **Vagrant + VirtualBox + Docker + Min
 
 ## 📦 Requirements
 
-Pastikan sudah install:
+Pastikan sudah terinstall:
 
 - Vagrant
 - VirtualBox
@@ -26,33 +25,14 @@ Pastikan sudah install:
 ---
 
 ## 📁 Project Structure
-```
 
+```bash
 .
 ├── Vagrantfile
 ├── .env
 ├── .env.example
 └── ssh/
-└── key_ssh.pub
-
-````
-
----
-
-## ⚙️ Configuration
-
-Copy file environment:
-
-```bash
-cp .env.example .env
-````
-
-Edit konfigurasi:
-
-```bash
-nano .env
-```
-
+    └── key_ssh.pub
 ---
 
 ## 🔧 Environment Variables
