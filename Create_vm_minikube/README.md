@@ -33,6 +33,7 @@ Pastikan sudah terinstall:
 ├── .env.example
 └── ssh/
     └── key_ssh.pub
+```
 ---
 
 ## 🔧 Environment Variables
