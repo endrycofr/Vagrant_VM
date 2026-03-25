@@ -1,0 +1,136 @@
+# ==============================
+# LOAD .env FILE
+# ==============================
+if File.exist?(".env")
+  File.readlines(".env").each do |line|
+    next if line.strip.empty? || line.start_with?("#")
+    key, value = line.strip.split("=", 2)
+    ENV[key] = value
+  end
+end
+
+
+Vagrant.configure("2") do |config|
+  # ==============================
+  # BASIC CONFIG
+  # ==============================
+  config.vm.box = ENV['BOX'] || "ubuntu/jammy64"
+  config.vm.hostname = ENV['HOSTNAME'] || "minikube-vm"
+
+  # ==============================
+  # PROVIDER: VirtualBox
+  # ==============================
+  config.vm.provider "virtualbox" do |vb|
+    vb.name   = ENV['VM_NAME'] || "minikube-vm"
+    vb.memory = ENV['MEMORY'] || "4096"
+    vb.cpus   = ENV['CPU'] || 2
+  end
+
+  # ==============================
+  # NETWORK CONFIG
+  # ==============================
+  NETWORK_TYPE = ENV['NETWORK'] || "nat"   # nat | bridge
+
+  if NETWORK_TYPE == "bridge"
+    BRIDGE_IF = ENV['BRIDGE_IF'] || "Wi-Fi"
+    config.vm.network "public_network", bridge: BRIDGE_IF
+  else
+    config.vm.network "forwarded_port", guest: 22, host: 2222, id: "ssh"
+  end
+
+  # ==============================
+  # SSH KEY CONFIG
+  # ==============================
+  ssh_key = ENV['SSH_PUB'] || "k3s.pem.pub"
+  ssh_key = File.expand_path(ssh_key)
+
+  if !File.exist?(ssh_key)
+    raise "❌ SSH key not found: #{ssh_key}"
+  end
+
+  # ==============================
+  # WAIT FOR BOOT
+  # ==============================
+  config.vm.provision "shell", inline: "sleep 10"
+
+  # ==============================
+  # COPY SSH KEY
+  # ==============================
+  config.vm.provision "file",
+    source: ssh_key,
+    destination: "/tmp/k3s.pem.pub"
+
+  # ==============================
+  # BASE SETUP
+  # ==============================
+  config.vm.provision "shell", privileged: true, inline: <<-SHELL
+    export DEBIAN_FRONTEND=noninteractive
+
+    retry() {
+      n=0
+      until [ $n -ge 5 ]
+      do
+        "$@" && break
+        n=$((n+1))
+        echo "Retry $n..."
+        sleep 5
+      done
+    }
+
+    retry apt-get update -y
+    retry apt-get install -y openssh-server curl apt-transport-https ca-certificates
+
+    systemctl enable ssh
+    systemctl restart ssh
+
+    mkdir -p /home/vagrant/.ssh
+    cat /tmp/k3s.pem.pub >> /home/vagrant/.ssh/authorized_keys
+
+    chown -R vagrant:vagrant /home/vagrant/.ssh
+    chmod 700 /home/vagrant/.ssh
+    chmod 600 /home/vagrant/.ssh/authorized_keys
+  SHELL
+
+  # ==============================
+  # INSTALL DOCKER (FIXED)
+  # ==============================
+  config.vm.provision "shell", privileged: true, inline: <<-SHELL
+    retry() {
+      n=0
+      until [ $n -ge 5 ]
+      do
+        "$@" && break
+        n=$((n+1))
+        echo "Retry $n..."
+        sleep 5
+      done
+    }
+
+    retry apt-get update -y
+    retry apt-get install -y docker.io conntrack
+
+    systemctl enable docker
+    systemctl start docker
+
+    usermod -aG docker vagrant
+  SHELL
+
+  # ==============================
+  # INSTALL MINIKUBE
+  # ==============================
+  config.vm.provision "shell", inline: <<-SHELL
+    curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
+    install minikube-linux-amd64 /usr/local/bin/minikube
+    rm minikube-linux-amd64
+  SHELL
+
+  # ==============================
+  # AUTO START MINIKUBE (OPTIONAL)
+  # ==============================
+  if ENV['AUTO_MINIKUBE'] == "true"
+    config.vm.provision "shell", inline: <<-SHELL
+      su - vagrant -c "minikube start --driver=docker"
+    SHELL
+  end
+
+end
