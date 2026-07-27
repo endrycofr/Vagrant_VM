@@ -1,0 +1,40 @@
+# justfile
+
+set shell := ["cmd.exe", "/c"]
+
+VM_NAME := "minikube-vm"
+VBOX_VMS := "D:\\ISO OS linux\\Virtualbox\\VirtualBox VMs"
+
+reset:
+    @echo Forcing VM poweroff...
+    -VBoxManage controlvm {{VM_NAME}} poweroff
+    @ping -n 3 127.0.0.1 > nul
+
+    @echo Destroying VM...
+    -vagrant destroy -f
+
+    @echo Removing old state...
+    -rd /s /q ".vagrant"
+
+    -del /f /q "..\ssh\k3s.pem"
+    -del /f /q "..\ssh\k3s.pem.pub"
+    -del /f /q "minikube-data.vdi"
+
+    @echo Removing VirtualBox VM folder...
+    -rd /s /q "{{VBOX_VMS}}\{{VM_NAME}}"
+
+    @echo Starting VM...
+    vagrant up
+
+del:
+    vagrant destroy -f
+
+up:
+    @echo Starting VM...
+    vagrant up
+
+stop:
+    vagrant halt
+
+reload:
+    vagrant reload

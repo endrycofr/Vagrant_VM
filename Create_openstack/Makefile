@@ -1,4 +1,4 @@
-.PHONY:  del up stop reset master
+.PHONY:  del up stop reset
 
 del:
 	vagrant destroy -f
@@ -9,5 +9,3 @@ stop:
 reset: 
 	vagrant destroy -f
 	vagrant up
-master:
-	vagrant up k3s-master1 lb1

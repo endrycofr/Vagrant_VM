@@ -1,0 +1,224 @@
+# ==============================
+# LOAD .env FILE
+# ==============================
+if File.exist?(".env")
+  File.readlines(".env").each do |line|
+    next if line.strip.empty? || line.start_with?("#")
+    key, value = line.strip.split("=", 2)
+    ENV[key.strip] = value.strip
+  end
+end
+
+# ==============================
+# AUTO DETECT BRIDGE 
+# ==============================
+def auto_bridge
+  output = `VBoxManage list bridgedifs`
+
+  current = {}
+  adapters = []
+
+  output.each_line do |line|
+    if line.strip.empty?
+      adapters << current unless current.empty?
+      current = {}
+    else
+      key, value = line.split(":", 2)
+      current[key.strip] = value.strip if key && value
+    end
+  end
+
+  adapters << current unless current.empty?
+
+  adapters.each do |a|
+    name = a["Name"]
+    next unless name
+
+    if name.downcase.include?("wi-fi") ||
+       name.downcase.include?("wireless") ||
+       name.downcase.include?("ethernet") ||
+       name.downcase.include?("realtek") ||
+       name.downcase.include?("intel")
+      return name
+    end
+  end
+
+  nil
+end
+
+Vagrant.configure("2") do |config|
+  config.vm.box = ENV['BOX'] || "bento/ubuntu-22.04"
+
+  # ==============================
+  # TIMEOUT CONFIG
+  # ==============================
+  config.vm.boot_timeout = 600
+  config.ssh.keep_alive = true
+  config.vm.graceful_halt_timeout = 300
+
+  # ==============================
+  # GLOBAL CONFIG
+  # ==============================
+  CONTROLLER_COUNT = (ENV['CONTROLLER_COUNT'] || 1).to_i
+  COMPUTE_COUNT = (ENV['COMPUTE_COUNT'] || 1).to_i
+  LB_COUNT     = (ENV['LB_COUNT'] || 1).to_i
+
+  BASE_IP = ENV['BASE_IP'] || "192.168.56."
+  BRIDGE  = ENV['BRIDGE']
+
+  ENABLE_LB = ENV['ENABLE_LB'] == "true"
+
+  CONTROLLER_CPU = (ENV['CONTROLLER_CPU'] || 2).to_i
+  CONTROLLER_MEM = (ENV['CONTROLLER_MEM'] || 2048).to_i
+
+  COMPUTE_CPU = (ENV['COMPUTE_CPU'] || 2).to_i
+  COMPUTE_MEM = (ENV['COMPUTE_MEM'] || 2048).to_i
+
+  LB_CPU = (ENV['LB_CPU'] || 2).to_i
+  LB_MEM = (ENV['LB_MEM'] || 2048).to_i
+
+  LB_IP_START = (ENV['LB_IP_START'] || 14).to_i
+
+  # ==============================
+  # SSH KEY
+  # ==============================
+  ssh_key = ENV['SSH_PUB'] || "k3s.pem.pub"
+  ssh_key = File.expand_path(ssh_key)
+
+  puts "🔑 SSH KEY PATH: #{ssh_key}"
+  puts "📁 EXIST?: #{File.exist?(ssh_key)}"
+
+  if !File.exist?(ssh_key)
+    raise "❌ SSH key not found: #{ssh_key}"
+  end
+
+  # ==============================
+  # NODE VM CONFIG
+  # ==============================
+  nodes = []
+
+  (1..CONTROLLER_COUNT).each do |i|
+    nodes << { name: "CONTROLLER#{i}", ip: "#{BASE_IP}#{10 + i}", role: "CONTROLLER" }
+  end
+
+  (1..COMPUTE_COUNT).each do |i|
+    nodes << { name: "COMPUTE#{i}", ip: "#{BASE_IP}#{20 + i}", role: "COMPUTE" }
+  end
+
+  if ENABLE_LB
+    (1..LB_COUNT).each do |i|
+      nodes << {
+        name: "lb#{i}",
+        ip: "#{BASE_IP}#{LB_IP_START + i - 1}",
+        role: "lb"
+      }
+    end
+  end
+
+  # ==============================
+  # DEFINE VM
+  # ==============================
+  nodes.each do |node|
+    config.vm.define node[:name] do |vm|
+      vm.vm.hostname = node[:name]
+
+      # ==============================
+      # AUTO BRIDGE (NO PROMPT)
+      # ==============================
+      bridge_name = nil
+
+      if BRIDGE && !BRIDGE.empty?
+        bridge_name = BRIDGE
+      else
+        bridge_name = auto_bridge
+      end
+
+      if bridge_name
+        puts "🌐 Using bridge: #{bridge_name}"
+        vm.vm.network "public_network", bridge: bridge_name
+      else
+        puts "⚠️ No bridge adapter found → skip public network"
+      end
+
+      # Private network (WAJIB)
+      vm.vm.network "private_network", ip: node[:ip]
+
+      # ==============================
+      # PROVIDER CONFIG
+      # ==============================
+      vm.vm.provider "virtualbox" do |vb|
+        vb.name = node[:name]
+        vb.gui = false
+
+        case node[:role]
+        when "COMPUTE"
+          vb.memory = COMPUTE_MEM
+          vb.cpus   = COMPUTE_CPU
+        when "lb"
+          vb.memory = LB_MEM
+          vb.cpus   = LB_CPU
+        else
+          vb.memory = CONTROLLER_MEM
+          vb.cpus   = CONTROLLER_CPU
+        end
+
+        vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+      end
+
+      # ==============================
+      # WAIT FOR VM TO BOOT 
+      # ==============================
+      vm.vm.provision "shell", inline: "sleep 15"
+
+      # ==============================
+      # COPY SSH KEY
+      # ==============================
+      vm.vm.provision "file",
+        source: ssh_key,
+        destination: "/tmp/k3s.pem.pub"
+
+      # ==============================
+      # PROVISION VM (INSTALL SSH & SETUP KEY)
+      # ==============================
+      vm.vm.provision "shell", privileged: true, inline: <<-SHELL
+        export DEBIAN_FRONTEND=noninteractive
+
+        retry() {
+          n=0
+          until [ $n -ge 5 ]
+          do
+            "$@" && break
+            n=$((n+1))
+            echo "Retry $n..."
+            sleep 5
+          done
+        }
+
+        retry sudo apt-get update -y -o Acquire::Retries=3
+        retry sudo apt-get install -y openssh-server curl
+
+        sudo systemctl enable ssh
+        sudo systemctl restart ssh
+
+        mkdir -p /home/vagrant/.ssh
+        cat /tmp/k3s.pem.pub >> /home/vagrant/.ssh/authorized_keys
+
+        chown -R vagrant:vagrant /home/vagrant/.ssh
+        chmod 700 /home/vagrant/.ssh
+        chmod 600 /home/vagrant/.ssh/authorized_keys
+      SHELL
+
+      # ==============================
+      # OPTIONAL LB SETUP
+      # ==============================
+      if node[:role] == "lb"
+        vm.vm.provision "shell", inline: <<-SHELL
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -y
+          sudo apt-get install -y haproxy
+          sudo systemctl enable haproxy
+        SHELL
+      end
+    end
+  end
+end

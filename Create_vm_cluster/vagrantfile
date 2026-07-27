@@ -10,141 +10,117 @@ if File.exist?(".env")
 end
 
 # ==============================
-# AUTO DETECT BRIDGE 
+# NETWORK HELPER
 # ==============================
-def auto_bridge
-  output = `VBoxManage list bridgedifs`
+def add_networks(vm, ip, bridge)
+  # Private network (cluster internal)
+  vm.vm.network "private_network", ip: ip
 
-  current = {}
-  adapters = []
-
-  output.each_line do |line|
-    if line.strip.empty?
-      adapters << current unless current.empty?
-      current = {}
-    else
-      key, value = line.split(":", 2)
-      current[key.strip] = value.strip if key && value
-    end
+  # Bridge network (optional)
+  if bridge && !bridge.strip.empty?
+    vm.vm.network "public_network",
+      bridge: bridge
   end
-
-  adapters << current unless current.empty?
-
-  adapters.each do |a|
-    name = a["Name"]
-    next unless name
-
-    if name.downcase.include?("wi-fi") ||
-       name.downcase.include?("wireless") ||
-       name.downcase.include?("ethernet") ||
-       name.downcase.include?("realtek") ||
-       name.downcase.include?("intel")
-      return name
-    end
-  end
-
-  nil
 end
+
+
+SSH_PRIVATE_KEY = ENV['SSH_PRIV'] || "../ssh/k3s.pem"
+SSH_PUBLIC_KEY  = ENV['SSH_PUB']  || "../ssh/k3s.pem.pub"
+unless File.exist?(SSH_PRIVATE_KEY) && File.exist?(SSH_PUBLIC_KEY)
+  puts "🔑 Generating SSH key..."
+  system("ssh-keygen -t ed25519  -f \"#{SSH_PRIVATE_KEY}\" -N \"\"")
+end
+
+PUBLIC_KEY_CONTENT = File.read(SSH_PUBLIC_KEY)
+
+
+
+# ==============================
+# SYNC SSH PATH TO .env
+# ==============================
+env_file = File.expand_path(".env", __dir__)
+env_lines = File.exist?(env_file) ? File.readlines(env_file) : []
+
+def set_env(env_lines, key, value)
+  found = false
+  env_lines.map! do |line|
+    if line.start_with?("#{key}=")
+      found = true
+      "#{key}=#{value}\n"
+    else
+      line
+    end
+  end
+  env_lines << "#{key}=#{value}\n" unless found
+  env_lines
+end
+
+env_lines = set_env(env_lines, "SSH_PRIV", SSH_PRIVATE_KEY)
+env_lines = set_env(env_lines, "SSH_PUB", SSH_PUBLIC_KEY)
+
+File.write(env_file, env_lines.join)
+
+
+
+# ==============================
+# GLOBAL CONFIG
+# ==============================
+MASTER_COUNT = (ENV['MASTER_COUNT'] || 1).to_i
+WORKER_COUNT = (ENV['WORKER_COUNT'] || 1).to_i
+LB_COUNT     = (ENV['LB_COUNT'] || 1).to_i
+
+BASE_IP = ENV['BASE_IP'] || "192.168.56."
+BRIDGE  = ENV['BRIDGE']
+ENABLE_LB = ENV['ENABLE_LB'] == "true"
+
+MASTER_CPU = (ENV['MASTER_CPU'] || 2).to_i
+MASTER_MEM = (ENV['MASTER_MEM'] || 4096).to_i
+
+WORKER_CPU = (ENV['WORKER_CPU'] || 2).to_i
+WORKER_MEM = (ENV['WORKER_MEM'] || 4096).to_i
+
+LB_CPU = (ENV['LB_CPU'] || 2).to_i
+LB_MEM = (ENV['LB_MEM'] || 4096).to_i
+
+MASTER_DISK = (ENV['MASTER_DISK'] || 50).to_i
+WORKER_DISK = (ENV['WORKER_DISK'] || 30).to_i
+LB_DISK     = (ENV['LB_DISK'] || 40).to_i
+
+LB_IP_START = (ENV['LB_IP_START'] || 14).to_i
 
 Vagrant.configure("2") do |config|
   config.vm.box = ENV['BOX'] || "bento/ubuntu-22.04"
-
-  # ==============================
-  # TIMEOUT CONFIG
-  # ==============================
   config.vm.boot_timeout = 600
+
+  # SSH (biar gak auth failure)
+  config.ssh.insert_key = true
   config.ssh.keep_alive = true
-  config.vm.graceful_halt_timeout = 300
 
-  # ==============================
-  # GLOBAL CONFIG
-  # ==============================
-  MASTER_COUNT = (ENV['MASTER_COUNT'] || 1).to_i
-  WORKER_COUNT = (ENV['WORKER_COUNT'] || 1).to_i
-  LB_COUNT     = (ENV['LB_COUNT'] || 1).to_i
-
-  BASE_IP = ENV['BASE_IP'] || "192.168.56."
-  BRIDGE  = ENV['BRIDGE']
-
-  ENABLE_LB = ENV['ENABLE_LB'] == "true"
-
-  MASTER_CPU = (ENV['MASTER_CPU'] || 2).to_i
-  MASTER_MEM = (ENV['MASTER_MEM'] || 2048).to_i
-
-  WORKER_CPU = (ENV['WORKER_CPU'] || 2).to_i
-  WORKER_MEM = (ENV['WORKER_MEM'] || 2048).to_i
-
-  LB_CPU = (ENV['LB_CPU'] || 2).to_i
-  LB_MEM = (ENV['LB_MEM'] || 2048).to_i
-
-  LB_IP_START = (ENV['LB_IP_START'] || 14).to_i
-
-  # ==============================
-  # SSH KEY
-  # ==============================
-  ssh_key = ENV['SSH_PUB'] || "k3s.pem.pub"
-  ssh_key = File.expand_path(ssh_key)
-
-  puts "🔑 SSH KEY PATH: #{ssh_key}"
-  puts "📁 EXIST?: #{File.exist?(ssh_key)}"
-
-  if !File.exist?(ssh_key)
-    raise "❌ SSH key not found: #{ssh_key}"
-  end
-
-  # ==============================
-  # NODE VM CONFIG
-  # ==============================
   nodes = []
 
   (1..MASTER_COUNT).each do |i|
-    nodes << { name: "k3s-master#{i}", ip: "#{BASE_IP}#{10 + i}", role: "master" }
+    nodes << { name: "k3s-master#{i}", ip: "#{BASE_IP}#{10+i}", role: "master" }
   end
 
   (1..WORKER_COUNT).each do |i|
-    nodes << { name: "k3s-worker#{i}", ip: "#{BASE_IP}#{20 + i}", role: "worker" }
+    nodes << { name: "k3s-worker#{i}", ip: "#{BASE_IP}#{20+i}", role: "worker" }
   end
 
   if ENABLE_LB
     (1..LB_COUNT).each do |i|
-      nodes << {
-        name: "lb#{i}",
-        ip: "#{BASE_IP}#{LB_IP_START + i - 1}",
-        role: "lb"
-      }
+      nodes << { name: "lb#{i}", ip: "#{BASE_IP}#{LB_IP_START+i-1}", role: "lb" }
     end
   end
 
-  # ==============================
-  # DEFINE VM
-  # ==============================
   nodes.each do |node|
     config.vm.define node[:name] do |vm|
       vm.vm.hostname = node[:name]
+      add_networks(vm, node[:ip], BRIDGE)
+
+      # vm.vm.network "private_network", ip: node[:ip]
 
       # ==============================
-      # AUTO BRIDGE (NO PROMPT)
-      # ==============================
-      bridge_name = nil
-
-      if BRIDGE && !BRIDGE.empty?
-        bridge_name = BRIDGE
-      else
-        bridge_name = auto_bridge
-      end
-
-      if bridge_name
-        puts "🌐 Using bridge: #{bridge_name}"
-        vm.vm.network "public_network", bridge: bridge_name
-      else
-        puts "⚠️ No bridge adapter found → skip public network"
-      end
-
-      # Private network (WAJIB)
-      vm.vm.network "private_network", ip: node[:ip]
-
-      # ==============================
-      # PROVIDER CONFIG
+      # PROVIDER
       # ==============================
       vm.vm.provider "virtualbox" do |vb|
         vb.name = node[:name]
@@ -154,69 +130,102 @@ Vagrant.configure("2") do |config|
         when "worker"
           vb.memory = WORKER_MEM
           vb.cpus   = WORKER_CPU
+          disk_size = WORKER_DISK
         when "lb"
           vb.memory = LB_MEM
           vb.cpus   = LB_CPU
+          disk_size = LB_DISK
         else
           vb.memory = MASTER_MEM
           vb.cpus   = MASTER_CPU
+          disk_size = MASTER_DISK
         end
 
         vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+
+        disk_file = "disk_#{node[:name]}.vdi"
+
+        unless File.exist?(disk_file)
+          vb.customize ['createhd', '--filename', disk_file, '--size', disk_size * 1024]
+        end
+
+        vb.customize [
+          'storageattach', :id,
+          '--storagectl', 'SATA Controller',
+          '--port', 1,
+          '--device', 0,
+          '--type', 'hdd',
+          '--medium', disk_file
+        ]
       end
 
       # ==============================
-      # WAIT FOR VM TO BOOT 
-      # ==============================
-      vm.vm.provision "shell", inline: "sleep 15"
-
-      # ==============================
-      # COPY SSH KEY
-      # ==============================
-      vm.vm.provision "file",
-        source: ssh_key,
-        destination: "/tmp/k3s.pem.pub"
-
-      # ==============================
-      # PROVISION VM (INSTALL SSH & SETUP KEY)
+      # PROVISION
       # ==============================
       vm.vm.provision "shell", privileged: true, inline: <<-SHELL
-        export DEBIAN_FRONTEND=noninteractive
+        set -e
 
-        retry() {
-          n=0
-          until [ $n -ge 5 ]
-          do
-            "$@" && break
-            n=$((n+1))
-            echo "Retry $n..."
-            sleep 5
-          done
-        }
+        # Fix DNS (WAJIB biar tidak error lagi)
+        echo "nameserver 8.8.8.8" > /etc/resolv.conf
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 
-        retry sudo apt-get update -y -o Acquire::Retries=3
-        retry sudo apt-get install -y openssh-server curl
+        apt-get update -y
+        apt-get install -y curl openssh-server
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        systemctl enable ssh
 
-        sudo systemctl enable ssh
-        sudo systemctl restart ssh
 
-        mkdir -p /home/vagrant/.ssh
-        cat /tmp/k3s.pem.pub >> /home/vagrant/.ssh/authorized_keys
+        # ==============================
+        # SSH KEY SETUP (IDEMPOTENT)
+        # ==============================
+        USER_HOME="/home/vagrant"
+        SSH_DIR="$USER_HOME/.ssh"
+        AUTH_KEYS="$SSH_DIR/authorized_keys"
 
-        chown -R vagrant:vagrant /home/vagrant/.ssh
-        chmod 700 /home/vagrant/.ssh
-        chmod 600 /home/vagrant/.ssh/authorized_keys
+        mkdir -p $SSH_DIR
+        chmod 700 $SSH_DIR
+
+        touch $AUTH_KEYS
+        grep -qxF "#{PUBLIC_KEY_CONTENT}" $AUTH_KEYS || echo "#{PUBLIC_KEY_CONTENT}" >> $AUTH_KEYS
+        chmod 600 $AUTH_KEYS
+        chown -R vagrant:vagrant $SSH_DIR
+
+        # ==============================
+        # SETUP DISK /data
+        # ==============================
+        if lsblk | grep -q sdb; then
+          if ! blkid /dev/sdb; then
+            mkfs.ext4 /dev/sdb
+          fi
+
+          mkdir -p /data
+
+          mountpoint -q /data || mount /dev/sdb /data
+          grep -q "/data" /etc/fstab || echo "/dev/sdb /data ext4 defaults 0 0" >> /etc/fstab
+        fi
+
+        # ==============================
+        # ADD SWAP (BIAR TIDAK CRASH)
+        # ==============================
+        if [ ! -f /swapfile ]; then
+          fallocate -l 2G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        fi
+
+
       SHELL
 
       # ==============================
-      # OPTIONAL LB SETUP
+      # LOAD BALANCER
       # ==============================
       if node[:role] == "lb"
         vm.vm.provision "shell", inline: <<-SHELL
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -y
-          sudo apt-get install -y haproxy
-          sudo systemctl enable haproxy
+          apt-get update -y
+          apt-get install -y haproxy
+          systemctl enable haproxy
         SHELL
       end
     end

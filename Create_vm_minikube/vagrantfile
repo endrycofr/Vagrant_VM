@@ -1,136 +1,310 @@
-# ==============================
-# LOAD .env FILE
-# ==============================
-if File.exist?(".env")
-  File.readlines(".env").each do |line|
-    next if line.strip.empty? || line.start_with?("#")
-    key, value = line.strip.split("=", 2)
-    ENV[key] = value
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+require "fileutils"
+
+# ==================================================
+# LOAD ENV
+# ==================================================
+def load_env(file = ".env")
+  return unless File.exist?(file)
+
+  File.readlines(file).each do |line|
+    line = line.strip
+    next if line.empty? || line.start_with?("#")
+
+    key, value = line.split("=", 2)
+    next unless key && value
+
+    ENV[key.strip] = value.strip.gsub(/^['"]|['"]$/, "")
   end
 end
 
+load_env
 
-Vagrant.configure("2") do |config|
-  # ==============================
-  # BASIC CONFIG
-  # ==============================
-  config.vm.box = ENV['BOX'] || "ubuntu/jammy64"
-  config.vm.hostname = ENV['HOSTNAME'] || "minikube-vm"
+# ==================================================
+# SSH
+# ==================================================
+SSH_PRIVATE_KEY = File.expand_path(
+  ENV.fetch("SSH_PRIV", "../ssh/k3s.pem")
+)
 
-  # ==============================
-  # PROVIDER: VirtualBox
-  # ==============================
-  config.vm.provider "virtualbox" do |vb|
-    vb.name   = ENV['VM_NAME'] || "minikube-vm"
-    vb.memory = ENV['MEMORY'] || "4096"
-    vb.cpus   = ENV['CPU'] || 2
-  end
+SSH_PUBLIC_KEY = File.expand_path(
+  ENV.fetch("SSH_PUB", "../ssh/k3s.pem.pub")
+)
 
-  # ==============================
-  # NETWORK CONFIG
-  # ==============================
-  NETWORK_TYPE = ENV['NETWORK'] || "nat"   # nat | bridge
+def generate_ssh_key(private_key, public_key)
+  return if File.exist?(private_key) && File.exist?(public_key)
 
-  if NETWORK_TYPE == "bridge"
-    BRIDGE_IF = ENV['BRIDGE_IF'] || "Wi-Fi"
-    config.vm.network "public_network", bridge: BRIDGE_IF
+  puts "Generating SSH key pair..."
+  FileUtils.mkdir_p(File.dirname(private_key))
+
+  system("ssh-keygen", "-t", "ed25519", "-f", private_key, "-N", "") or
+    abort "ERROR: ssh-keygen failed"
+end
+
+generate_ssh_key(SSH_PRIVATE_KEY, SSH_PUBLIC_KEY)
+
+PUBLIC_KEY_CONTENT = File.read(SSH_PUBLIC_KEY).strip
+
+# ==================================================
+# GLOBAL CONFIG
+# ==================================================
+
+BOX_NAME    = ENV.fetch("BOX",        "ubuntu/jammy64")
+HOSTNAME    = ENV.fetch("HOSTNAME",   "minikube-vm")
+VM_NAME     = ENV.fetch("VM_NAME",    "minikube-vm")
+VM_CPU      = ENV.fetch("CPU",        "4").to_i
+VM_MEMORY   = ENV.fetch("MEMORY",     "6144").to_i
+VM_DISK     = ENV.fetch("DISK",       "50GB")
+PRIVATE_IP  = ENV.fetch("PRIVATE_IP", "192.168.56.10")
+AUTO_MINIKUBE = ENV.fetch("AUTO_MINIKUBE", "false")
+
+# ==================================================
+# PORT MAPPINGS
+# ==================================================
+PORT_MAPPINGS = {
+  ssh:   [22,  2222],
+  http:  [80,  8080],
+  https: [443, 8443]
+}.freeze
+
+
+# ==================================================
+# PROVISION: BASE SETUP
+# ==================================================
+BASE_SETUP = <<~SHELL
+  set -euo pipefail
+  export DEBIAN_FRONTEND=noninteractive
+
+  echo "==> Updating packages..."
+  apt-get update -y
+
+  echo "==> Installing dependencies..."
+  apt-get install -y \
+    curl \
+    wget \
+    vim \
+    git \
+    docker.io \
+    net-tools \
+    conntrack \
+    openssh-server
+
+  echo "==> Enabling services..."
+  systemctl enable docker ssh
+  systemctl restart docker ssh
+
+  echo "==> Configuring vagrant user..."
+  usermod -aG docker vagrant
+
+  echo "==> Setting up swap..."
+  if [ ! -f /swapfile ]; then
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo "/swapfile none swap sw 0 0" >> /etc/fstab
+  fi
+SHELL
+# ==================================================
+# PROVISION: DOCKER SWARM INIT
+# ==================================================
+INIT_SWARM = <<~SHELL
+  set -euo pipefail
+
+  echo "==> Initializing Docker Swarm..."
+
+  if docker info | grep -q "Swarm: active"; then
+    echo "Swarm already active"
   else
-    config.vm.network "forwarded_port", guest: 22, host: 2222, id: "ssh"
-  end
+    docker swarm init --advertise-addr #{PRIVATE_IP}
+  fi
+SHELL
 
-  # ==============================
-  # SSH KEY CONFIG
-  # ==============================
-  ssh_key = ENV['SSH_PUB'] || "k3s.pem.pub"
-  ssh_key = File.expand_path(ssh_key)
+# ==================================================
+# PROVISION: INJECT SSH KEY
+# ==================================================
+INJECT_SSH_KEY = <<~SHELL
+  set -euo pipefail
 
-  if !File.exist?(ssh_key)
-    raise "❌ SSH key not found: #{ssh_key}"
-  end
+  echo "==> Injecting SSH public key..."
+  install -d -m 700 -o vagrant -g vagrant /home/vagrant/.ssh
+  touch /home/vagrant/.ssh/authorized_keys
 
-  # ==============================
-  # WAIT FOR BOOT
-  # ==============================
-  config.vm.provision "shell", inline: "sleep 10"
+  grep -qxF "#{PUBLIC_KEY_CONTENT}" /home/vagrant/.ssh/authorized_keys || \
+    echo "#{PUBLIC_KEY_CONTENT}" >> /home/vagrant/.ssh/authorized_keys
 
-  # ==============================
-  # COPY SSH KEY
-  # ==============================
-  config.vm.provision "file",
-    source: ssh_key,
-    destination: "/tmp/k3s.pem.pub"
+  chmod 600 /home/vagrant/.ssh/authorized_keys
+  chown -R vagrant:vagrant /home/vagrant/.ssh
+SHELL
 
-  # ==============================
-  # BASE SETUP
-  # ==============================
-  config.vm.provision "shell", privileged: true, inline: <<-SHELL
-    export DEBIAN_FRONTEND=noninteractive
+# ==================================================
+# PROVISION: INSTALL KUBECTL
+# ==================================================
+INSTALL_KUBECTL = <<~SHELL
+  set -euo pipefail
 
-    retry() {
-      n=0
-      until [ $n -ge 5 ]
-      do
-        "$@" && break
-        n=$((n+1))
-        echo "Retry $n..."
-        sleep 5
-      done
-    }
+  echo "==> Installing kubectl..."
+  VERSION=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
 
-    retry apt-get update -y
-    retry apt-get install -y openssh-server curl apt-transport-https ca-certificates
+  curl -fsSLO \
+    https://dl.k8s.io/release/${VERSION}/bin/linux/amd64/kubectl
 
-    systemctl enable ssh
-    systemctl restart ssh
+  install -m 0755 kubectl /usr/local/bin/kubectl
+  rm -f kubectl
 
-    mkdir -p /home/vagrant/.ssh
-    cat /tmp/k3s.pem.pub >> /home/vagrant/.ssh/authorized_keys
+  kubectl version --client
+SHELL
 
-    chown -R vagrant:vagrant /home/vagrant/.ssh
-    chmod 700 /home/vagrant/.ssh
-    chmod 600 /home/vagrant/.ssh/authorized_keys
-  SHELL
+# ==================================================
+# PROVISION: INSTALL HELM
+# ==================================================
+INSTALL_HELM = <<~SHELL
+  set -euo pipefail
 
-  # ==============================
-  # INSTALL DOCKER (FIXED)
-  # ==============================
-  config.vm.provision "shell", privileged: true, inline: <<-SHELL
-    retry() {
-      n=0
-      until [ $n -ge 5 ]
-      do
-        "$@" && break
-        n=$((n+1))
-        echo "Retry $n..."
-        sleep 5
-      done
-    }
+  echo "==> Installing Helm..."
+  curl -fsSL \
+    https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+    | bash
 
-    retry apt-get update -y
-    retry apt-get install -y docker.io conntrack
+  helm version
+SHELL
 
-    systemctl enable docker
-    systemctl start docker
+# ==================================================
+# PROVISION: INSTALL MINIKUBE
+# ==================================================
+INSTALL_MINIKUBE = <<~SHELL
+  set -euo pipefail
 
-    usermod -aG docker vagrant
-  SHELL
+  echo "==> Installing Minikube..."
+  curl -fsSLO \
+    https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
 
-  # ==============================
-  # INSTALL MINIKUBE
-  # ==============================
-  config.vm.provision "shell", inline: <<-SHELL
-    curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
-    install minikube-linux-amd64 /usr/local/bin/minikube
-    rm minikube-linux-amd64
-  SHELL
+  install minikube-linux-amd64 /usr/local/bin/minikube
+  rm -f minikube-linux-amd64
 
-  # ==============================
-  # AUTO START MINIKUBE (OPTIONAL)
-  # ==============================
-  if ENV['AUTO_MINIKUBE'] == "true"
-    config.vm.provision "shell", inline: <<-SHELL
-      su - vagrant -c "minikube start --driver=docker"
-    SHELL
+  minikube version
+SHELL
+
+# ==================================================
+# PROVISION: START MINIKUBE
+# ==================================================
+START_MINIKUBE = <<~SHELL
+  set -euo pipefail
+
+  echo "==> Starting Minikube..."
+  su - vagrant -c '
+    minikube start \
+      --driver=docker \
+      --memory=#{VM_MEMORY - 1024} \
+      --cpus=#{VM_CPU}
+  '
+SHELL
+
+# ==================================================
+# VAGRANT
+# ==================================================
+Vagrant.configure("2") do |config|
+
+  # ==================================================
+  # DISK SIZE (requires: vagrant plugin install vagrant-disksize)
+  # ==================================================
+  config.disksize.size = VM_DISK
+
+  # ==================================================
+  # SSH — allow insecure key as fallback for first boot
+  # ==================================================
+  config.ssh.insert_key      = false
+  config.ssh.private_key_path = [
+    SSH_PRIVATE_KEY,
+    "~/.vagrant.d/insecure_private_key"
+  ]
+
+  config.vm.define VM_NAME do |node|
+
+    # ==================================================
+    # BASIC
+    # ==================================================
+    node.vm.box          = BOX_NAME
+    node.vm.hostname     = HOSTNAME
+    node.vm.boot_timeout = 900
+
+    # ==================================================
+    # NETWORK
+    # ==================================================
+    node.vm.network "private_network", ip: PRIVATE_IP
+ 
+    PORT_MAPPINGS.each do |id, (guest, host)|
+      node.vm.network "forwarded_port",
+        guest:        guest,
+        host:         host,
+        id:           id.to_s,
+        auto_correct: true
+    end
+
+    # ==================================================
+    # PROVIDER
+    # ==================================================
+    node.vm.provider "virtualbox" do |vb|
+      vb.name   = VM_NAME
+      vb.gui    = false
+      vb.memory = VM_MEMORY
+      vb.cpus   = VM_CPU
+
+      vb.customize ["modifyvm", :id, "--ioapic",         "on"]
+      vb.customize ["modifyvm", :id, "--nictype1",       "virtio"]
+      vb.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+    end
+
+    # ==================================================
+    # PROVISIONERS (order matters)
+    # ==================================================
+
+    # 1. Inject SSH key first so subsequent provisions can connect
+    node.vm.provision "shell",
+      name:       "inject-ssh-key",
+      privileged: true,
+      inline:     INJECT_SSH_KEY
+
+    # 2. Copy public key to VM for reference
+    node.vm.provision "file",
+      source:      SSH_PUBLIC_KEY,
+      destination: "/tmp/k3s.pem.pub"
+
+    # 3. Base OS setup
+    node.vm.provision "shell",
+      name:       "base-setup",
+      privileged: true,
+      inline:     BASE_SETUP
+    # 4. Optionally initialize Docker Swarm
+    node.vm.provision "shell",
+      name:       "init-swarm",
+      privileged: true,
+      inline:     INIT_SWARM
+    # 5. Optionally start Minikube
+    if AUTO_MINIKUBE == "true"
+      # 4. Install tooling
+      node.vm.provision "shell",
+        name:       "install-kubectl",
+        privileged: true,
+        inline:     INSTALL_KUBECTL
+
+      node.vm.provision "shell",
+        name:       "install-helm",
+        privileged: true,
+        inline:     INSTALL_HELM
+
+      node.vm.provision "shell",
+        name:       "install-minikube",
+        privileged: true,
+        inline:     INSTALL_MINIKUBE
+      node.vm.provision "shell",
+        name:       "start-minikube",
+        privileged: true,
+        inline:     START_MINIKUBE
+    end
+
   end
 
 end

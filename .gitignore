@@ -6,3 +6,6 @@ ssh/*.key
 .env
 .env.local
 .vagrant
+git.txt
+nul
+*.vdi
